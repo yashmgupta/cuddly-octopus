@@ -1,12 +1,37 @@
-# 🐙 Gemini Autonomous Agent
+# 🐙 Gemini Autonomous Agent — Multi-Module Edition
 
-A self-learning AI agent powered by **Gemini 2.5 Flash** (Google AI Studio free tier).
+A self-learning AI agent powered by **Gemini 2.5 Flash** (Google AI Studio **free tier**).
 
-## Features
-- 🧠 Semantic skill routing via Gemini
-- ⚡ Dynamically generates & saves new Python skills
-- 💾 Persistent skill storage in `skills_database.json`
-- 🔍 Web search via `googlesearch-python`
+## Architecture
+
+```
+User Prompt
+    │
+    ▼
+┌─────────────┐
+│   router    │  ← Gemini semantic match against known skills
+└──────┬──────┘
+       │
+  ┌────┴─────┐
+  │          │
+MATCH      NEW SKILL
+  │          │
+  ▼          ▼
+run_skill  planner.make_plan()     ← Gemini step-by-step plan
+           executor.run()          ← ReAct loop (up to 8 steps)
+             ├─ web_search tool
+             ├─ read_file tool
+             └─ write_file tool
+           _reflect()              ← auto-extract reusable skill
+           generate_and_run_skill()← Gemini writes + saves code
+```
+
+## Hybrid Skill Store
+
+| Store | What it holds |
+|---|---|
+| `data/skills_database.json` | Executable Python code (easy to inspect/edit) |
+| `data/agent.db` (SQLite) | Trigger text, success/fail stats, timestamps |
 
 ## Quickstart (Local)
 
@@ -15,24 +40,24 @@ A self-learning AI agent powered by **Gemini 2.5 Flash** (Google AI Studio free 
 git clone https://github.com/yashmgupta/cuddly-octopus.git
 cd cuddly-octopus/gemini-agent
 
-# 2. Install dependencies
+# 2. Install
 pip install -r requirements.txt
 
-# 3. Set your API key (get it free from https://aistudio.google.com/apikey)
+# 3. Configure API key (free from https://aistudio.google.com/apikey)
 cp .env.example .env
-# Edit .env and paste your key
+# Edit .env → paste your key
 
 # 4. Run
-python agent.py
+python main.py
 ```
 
 ## Quickstart (Google Colab)
 
 1. Open `colab_runner.ipynb` in [Google Colab](https://colab.research.google.com)
-2. Paste your free API key in **Step 3**
+2. Paste your API key in **Step 3**
 3. Run all cells
 
-## Free Tier Limits (Google AI Studio)
+## Free Tier Limits
 
 | Limit | Value |
 |---|---|
@@ -40,9 +65,15 @@ python agent.py
 | Requests per day | 1,500 |
 | Tokens per minute | 1M |
 
-## Customise
+## Module Overview
 
-Edit the last line of `agent.py` to change the task prompt:
-```python
-await agent.execute_task("Search for latest AI news")
-```
+| File | Role |
+|---|---|
+| `main.py` | CLI entry point, orchestrates the flow |
+| `agent/router.py` | Gemini semantic router |
+| `agent/planner.py` | Gemini step-by-step planner |
+| `agent/executor.py` | ReAct loop + code generation + reflect |
+| `agent/skills.py` | Hybrid JSON + SQLite skill store |
+| `agent/memory.py` | SQLite episodic memory |
+| `agent/tools.py` | `read_file`, `write_file`, `web_search` |
+| `agent/llm.py` | Thin Gemini API wrapper |
