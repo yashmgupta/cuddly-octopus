@@ -1,15 +1,15 @@
-# Evo-Agent MVP
+# evo-agent — Minimal Evolving AI Agent
 
-A minimal evolving AI agent with memory, skills, planning, and execution.
+A lightweight Python AI agent with memory, skills, planning, and a ReAct execution loop.
 
 ## Features
 
 - **Memory** — Persists past task results in SQLite, ranked by importance
-- **Skills** — Saves reusable skill patterns learned from completed tasks
-- **Planner** — Uses an LLM to generate a step-by-step plan given goal + context
-- **Executor** — Runs the plan, saves the outcome, and reflects to create new skills
-- **Tools** — File read/write workspace utilities
-- **CI** — GitHub Actions runs `pytest` on every push/PR
+- **Skills** — Saves reusable patterns learned from completed tasks (upsert by name)
+- **Planner** — Uses an LLM to generate a step-by-step plan from goal + context
+- **Executor** — ReAct loop: act → observe → repeat → save result → reflect
+- **Tools** — Declarative `Tool` class; built-ins: `read_file`, `write_file`
+- **CI** — GitHub Actions runs `pytest` on every push / PR
 
 ## Setup
 
@@ -20,11 +20,13 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # Edit .env and add your OPENAI_API_KEY
-
-python main.py
 ```
 
 ## Usage
+
+```bash
+python main.py
+```
 
 ```
 Goal > Make a short plan for researching budget hotels in Bangkok
@@ -32,38 +34,46 @@ Goal > Make a short plan for researching budget hotels in Bangkok
 
 The agent will:
 1. Search relevant memories
-2. Search relevant skills
-3. Create a numbered plan via LLM
-4. Execute the plan and produce an answer
-5. Save the result to memory
-6. Reflect and optionally create a reusable skill
+2. Build a plan via the LLM
+3. Execute the plan step-by-step (ReAct loop)
+4. Save the result to memory
+5. Reflect and optionally create a reusable skill
 
 ## Project Structure
 
 ```
 evo-agent/
-  main.py              # Entry point
+  main.py              # CLI entry point (rich-based)
   requirements.txt
   .env.example
   agent/
-    llm.py             # OpenAI client wrapper
-    memory.py          # SQLite-backed memory store
-    tools.py           # File workspace tools
-    skills.py          # Skill persistence & search
-    planner.py         # LLM-based goal planner
-    executor.py        # Task executor + reflection loop
-  data/                # SQLite DB lives here (gitignored)
+    llm.py             # OpenAI chat.completions wrapper (chat / ask)
+    memory.py          # SQLite store: memories + skills tables
+    tools.py           # Tool dataclass + read_file / write_file built-ins
+    skills.py          # Skill interface (thin re-export from memory)
+    planner.py         # LLM-based goal → numbered step list
+    executor.py        # ReAct loop: plan → act → observe → reflect
   tests/
-    test_memory.py
+    test_memory.py     # Memory + skills unit tests
+    test_tools.py      # Tool unit tests
+  data/                # SQLite DB lives here (gitignored)
+  workspace/           # Agent file workspace (gitignored)
   .github/workflows/
-    test.yml
+    test.yml           # CI: pytest on push / PR
 ```
 
 ## Running Tests
 
 ```bash
-pytest
+python -m pytest --tb=short -v
 ```
+
+## Environment Variables
+
+| Variable        | Default        | Description                  |
+|-----------------|----------------|------------------------------|
+| `OPENAI_API_KEY` | —             | Required — your OpenAI key   |
+| `MODEL`         | `gpt-4.1-mini` | OpenAI model name            |
 
 ## Next Steps
 
