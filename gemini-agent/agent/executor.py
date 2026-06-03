@@ -38,6 +38,7 @@ You are a learning agent. Given a completed task, decide whether the approach
 was generic enough to save as a reusable skill.
 
 If yes, reply with JSON: {{"name": "...", "trigger": "...", "instructions": "..."}}
+  IMPORTANT: "name" MUST be a valid Python snake_case identifier (lowercase, underscores only, no spaces).
 If no, reply with exactly: null"""
 
 _CODEGEN_SYSTEM = """\
@@ -47,7 +48,20 @@ Generate a single, clean Python function with the exact name provided.
 - Output ONLY the function inside a ```python block — no explanation."""
 
 
-# ── Public entry points ───────────────────────────────────────────────────
+def _to_snake_case(name: str) -> str:
+    """Convert any string to a valid Python snake_case identifier."""
+    # Replace spaces/hyphens/dots with underscores
+    name = re.sub(r"[\s\-\.]+", "_", name.strip())
+    # Remove any characters that are not alphanumeric or underscore
+    name = re.sub(r"[^\w]", "", name)
+    # Lowercase everything
+    name = name.lower()
+    # Strip leading digits/underscores
+    name = name.lstrip("_0123456789") or "skill"
+    return name
+
+
+# ── Public entry points ────────────────────────────────────────────────────
 
 def run(goal: str) -> str:
     """Run the full plan → ReAct → reflect loop and return the answer."""
@@ -92,6 +106,9 @@ def run(goal: str) -> str:
 
 def generate_and_run_skill(skill_name: str, description: str, goal: str, arg=None) -> None:
     """Ask Gemini to write the skill code, persist it, then execute it."""
+    # Always ensure skill_name is a valid Python identifier
+    skill_name = _to_snake_case(skill_name)
+
     prompt = (
         f"Generate a Python function named '{skill_name}' that: {description}\n"
         f"Original goal: {goal}"
@@ -107,22 +124,35 @@ def generate_and_run_skill(skill_name: str, description: str, goal: str, arg=Non
 def run_skill(skill_name: str, arg=None) -> None:
     """Execute an existing skill by name and update its stats."""
     all_skills = skill_store.load_all_skills()
+
+    # If exact name not found, try snake_case version
     if skill_name not in all_skills:
-        print(f"\u26a0\ufe0f Skill '{skill_name}' not found.")
-        return
+        snake = _to_snake_case(skill_name)
+        if snake in all_skills:
+            skill_name = snake
+        else:
+            print(f"\u26a0\ufe0f Skill '{skill_name}' not found.")
+            return
+
     code = all_skills[skill_name]["code"]
     success = _run_skill_code(skill_name, code, arg)
-    # Only update SQLite stats for non-builtin skills
     try:
         skill_store.update_skill_stats(skill_name, success)
     except Exception:
         pass
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────
+# ── Internal helpers ───────────────────────────────────────────────────────
 
 def _run_skill_code(skill_name: str, code_str: str, arg=None) -> bool:
     """exec() the skill code and call the function; returns True on success."""
+    # Sanitize skill name for use as a Python function name
+    safe_name = _to_snake_case(skill_name)
+
+    # If the code uses the original (possibly invalid) name, patch it
+    if skill_name != safe_name:
+        code_str = code_str.replace(f"def {skill_name}(", f"def {safe_name}(")
+
     try:
         from googlesearch import search  # make available to generated code
         local_ctx: dict = {"search": search}
@@ -130,7 +160,7 @@ def _run_skill_code(skill_name: str, code_str: str, arg=None) -> bool:
         global_ctx["search"] = search
 
         exec(code_str, global_ctx, local_ctx)  # noqa: S102
-        func = local_ctx.get(skill_name) or global_ctx.get(skill_name)
+        func = local_ctx.get(safe_name) or global_ctx.get(safe_name)
 
         if func:
             sig = inspect.signature(func)
@@ -172,16 +202,18 @@ def _reflect(goal: str, history: list[dict]) -> None:
         return
     skill = _parse_json(raw)
     if skill and {"name", "trigger", "instructions"} <= skill.keys():
+        # Always sanitize the name Gemini returns
+        safe_name = _to_snake_case(skill["name"])
         stub = (
             f"# Auto-reflected from goal: {goal[:60]}\n"
-            f"def {skill['name']}():\n"
+            f"def {safe_name}():\n"
             f"    \"\"\"{ skill['instructions'] }\"\"\"\n"
             f"    pass  # Replace with real implementation\n"
         )
         skill_store.save_skill(
-            skill["name"],
+            safe_name,
             skill["trigger"],
             skill["instructions"][:120],
             stub,
         )
-        print(f"\U0001f9e0 Reflected new skill saved: '{skill['name']}'")
+        print(f"\U0001f9e0 Reflected new skill saved: '{safe_name}'")
