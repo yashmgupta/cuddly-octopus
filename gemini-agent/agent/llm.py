@@ -1,7 +1,11 @@
 """Thin wrapper around the Google Gemini API.
 
 Includes automatic retry with exponential backoff to handle the
-free-tier rate limit of 5 RPM on gemini-2.5-flash.
+free-tier rate limit of gemini-2.0-flash (15 RPM, 1500/day).
+
+Free tier comparison:
+  gemini-2.5-flash →   5 RPM,   20 req/day  ← too low
+  gemini-2.0-flash →  15 RPM, 1500 req/day  ← recommended
 """
 
 import os
@@ -15,13 +19,36 @@ from google.genai.errors import ClientError
 load_dotenv()
 
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-MODEL: str = os.getenv("MODEL", "gemini-2.5-flash")
+# gemini-2.0-flash: 15 RPM, 1500 req/day on free tier
+MODEL: str = os.getenv("MODEL", "gemini-2.0-flash")
 
-# Free tier = 5 RPM → wait at least 12s between calls.
-# Retry up to MAX_RETRIES times on 429, doubling the wait each time.
-_MIN_CALL_GAP: float = float(os.getenv("MIN_CALL_GAP", "12"))
+# 15 RPM → 1 call every 4s minimum; we use 5s to be safe
+_MIN_CALL_GAP: float = float(os.getenv("MIN_CALL_GAP", "5"))
 _MAX_RETRIES: int = 5
 _last_call_ts: float = 0.0
+
+
+def _is_rate_limit(exc: ClientError) -> bool:
+    """Check if a ClientError is a 429 rate-limit error."""
+    # The google-genai SDK exposes the HTTP code in different ways
+    # depending on the version — check all known locations.
+    code = (
+        getattr(exc, "status_code", None)
+        or getattr(exc, "code", None)
+        or getattr(exc, "http_status", None)
+    )
+    if code == 429:
+        return True
+    # Fallback: check the string representation
+    return "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+
+
+def _get_retry_delay(exc: ClientError, default: float) -> float:
+    """Extract the suggested retry delay from the error message."""
+    match = re.search(r"retry.*?(\d+)s", str(exc), re.IGNORECASE)
+    if match:
+        return max(int(match.group(1)) + 2, default)
+    return default
 
 
 def _call_with_retry(contents, config) -> str:
@@ -46,18 +73,14 @@ def _call_with_retry(contents, config) -> str:
             return response.text.strip()
 
         except ClientError as exc:
-            if exc.status_code != 429:
+            if not _is_rate_limit(exc):
                 raise  # non-rate-limit error → re-raise immediately
 
-            # Try to read retryDelay from the error details
-            retry_after = delay
-            msg = str(exc)
-            match = re.search(r"retry.*?(\d+)s", msg, re.IGNORECASE)
-            if match:
-                retry_after = max(int(match.group(1)) + 2, delay)
-
-            print(f"⚠️  429 Rate limit hit (attempt {attempt + 1}/{_MAX_RETRIES}). "
-                  f"Waiting {retry_after:.0f}s…")
+            retry_after = _get_retry_delay(exc, delay)
+            print(
+                f"⚠️  429 Rate limit hit (attempt {attempt + 1}/{_MAX_RETRIES}). "
+                f"Waiting {retry_after:.0f}s…"
+            )
             time.sleep(retry_after)
             delay *= 2  # exponential backoff
 
